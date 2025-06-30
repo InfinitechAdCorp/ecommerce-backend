@@ -12,7 +12,34 @@ use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\TestimonialController;
 use App\Http\Controllers\AnalyticsController;
 use App\Http\Controllers\ContactController;
+use App\Http\Controllers\ChatController;
+use App\Http\Controllers\AdminChatController;
 use App\Http\Middleware\AdminMiddleware; // Import the AdminMiddleware
+
+// Test route to verify API is working
+Route::get('/test', function () {
+    return response()->json([
+        'success' => true,
+        'message' => 'API is working',
+        'timestamp' => now()
+    ]);
+});
+
+// Debug route to list all routes
+Route::get('/routes', function () {
+    $routes = [];
+    foreach (Route::getRoutes() as $route) {
+        if (str_starts_with($route->uri(), 'api/')) {
+            $routes[] = [
+                'method' => implode('|', $route->methods()),
+                'uri' => $route->uri(),
+                'name' => $route->getName(),
+                'action' => $route->getActionName()
+            ];
+        }
+    }
+    return response()->json($routes);
+});
 
 // Public routes
 Route::post('/register', [AuthController::class, 'register']);
@@ -78,6 +105,25 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Analytics routes
     Route::get('/admin/analytics', [AnalyticsController::class, 'dashboard']);
+
+    // Chat routes for users (FIXED: Added auth middleware)
+    Route::prefix('chat')->group(function () {
+        Route::get('/conversation', [ChatController::class, 'getConversation']);
+        Route::post('/message', [ChatController::class, 'sendMessage']);
+        Route::get('/messages/{conversationId}', [ChatController::class, 'getMessages']);
+        Route::post('/close/{conversationId}', [ChatController::class, 'closeConversation']);
+        Route::post('/conversation', [ChatController::class, 'createConversation']);
+    });
+
+    // Admin chat routes (FIXED: Added auth middleware)
+    Route::prefix('admin/chat')->group(function () {
+        Route::get('/conversations', [AdminChatController::class, 'getConversations']);
+        Route::get('/stats', [AdminChatController::class, 'getDashboardStats']);
+        Route::post('/assign/{conversationId}', [AdminChatController::class, 'assignConversation']);
+        Route::post('/end/{conversationId}', [AdminChatController::class, 'endConversation']);
+        Route::post('/status/{conversationId}', [AdminChatController::class, 'updateConversationStatus']);
+        Route::get('/debug/{conversationId}', [AdminChatController::class, 'debugConversation']);
+    });
 });
 
 // Admin contact routes (protected)
@@ -87,4 +133,8 @@ Route::middleware(['auth:sanctum', AdminMiddleware::class])->group(function () {
     Route::put('/admin/contact-inquiries/{id}/status', [ContactController::class, 'updateStatus']);
     Route::post('/admin/contact-inquiries/{id}/reply', [ContactController::class, 'reply']);
     Route::delete('/admin/contact-inquiries/{id}', [ContactController::class, 'destroy']);
+});
+
+Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
+    return $request->user();
 });

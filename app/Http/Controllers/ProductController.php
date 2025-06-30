@@ -4,13 +4,66 @@ namespace App\Http\Controllers;
 
 use App\Models\Product;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
 
 class ProductController extends Controller
 {
+    /**
+     * Save uploaded image directly to public directory
+     * Returns RELATIVE path for direct public access
+     */
+    private function saveImageToPublic($image)
+    {
+        try {
+            // Create the directory if it doesn't exist
+            $publicPath = public_path('images/products');
+            if (!File::exists($publicPath)) {
+                File::makeDirectory($publicPath, 0755, true);
+                Log::info('Created directory: ' . $publicPath);
+            }
+
+            // Generate unique filename
+            $filename = time() . '_' . Str::random(10) . '.' . $image->getClientOriginalExtension();
+            
+            // Move file directly to public directory
+            $image->move($publicPath, $filename);
+            
+            // Return ONLY the relative path - NO STORAGE REFERENCES
+            $relativePath = '/images/products/' . $filename;
+            Log::info('Image saved directly to public', ['path' => $relativePath]);
+            
+            return $relativePath;
+        } catch (\Exception $e) {
+            Log::error('Failed to save image to public directory', ['error' => $e->getMessage()]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Clean any path to be direct public path
+     * NO STORAGE CONVERSION - DIRECT PUBLIC ONLY
+     */
+    private function cleanImagePath($imagePath)
+    {
+        if (empty($imagePath)) {
+            return $imagePath;
+        }
+
+        // If it's already a clean public path, return it
+        if (strpos($imagePath, '/images/products/') === 0) {
+            return $imagePath;
+        }
+
+        // Extract just the filename from any path
+        $filename = basename($imagePath);
+        
+        // Return clean public path
+        return '/images/products/' . $filename;
+    }
+
     public function index(Request $request)
     {
         $query = Product::query();
@@ -20,7 +73,7 @@ class ProductController extends Controller
             $query->where('category', $request->category);
         }
 
-        // Enhanced search functionality - search across multiple fields
+        // Enhanced search functionality
         if ($request->has('search') && $request->search) {
             $searchTerm = $request->search;
             $query->where(function ($q) use ($searchTerm) {
@@ -58,6 +111,17 @@ class ProductController extends Controller
 
         $products = $query->get();
 
+        // Clean all image paths to be direct public paths
+        $products->transform(function ($product) {
+            if ($product->images && is_array($product->images)) {
+                $cleanedImages = array_map([$this, 'cleanImagePath'], $product->images);
+                $product->images = $cleanedImages;
+                // Update database with clean paths
+                $product->save();
+            }
+            return $product;
+        });
+
         return response()->json([
             'success' => true,
             'data' => $products,
@@ -65,7 +129,6 @@ class ProductController extends Controller
         ]);
     }
 
-    // New method for featured products
     public function featured()
     {
         try {
@@ -73,6 +136,16 @@ class ProductController extends Controller
                 ->where('in_stock', true)
                 ->orderBy('created_at', 'desc')
                 ->get();
+
+            // Clean all image paths
+            $featuredProducts->transform(function ($product) {
+                if ($product->images && is_array($product->images)) {
+                    $cleanedImages = array_map([$this, 'cleanImagePath'], $product->images);
+                    $product->images = $cleanedImages;
+                    $product->save();
+                }
+                return $product;
+            });
 
             return response()->json([
                 'success' => true,
@@ -114,26 +187,26 @@ class ProductController extends Controller
 
         $data = $request->all();
         
-        // Handle image uploads
+        // Handle image uploads - DIRECT TO PUBLIC ONLY
         $imagePaths = [];
         
-        // Add existing images
+        // Clean existing images
         if ($request->has('existing_images') && is_array($request->existing_images)) {
-            $imagePaths = array_merge($imagePaths, $request->existing_images);
+            $cleanedExisting = array_map([$this, 'cleanImagePath'], $request->existing_images);
+            $imagePaths = array_merge($imagePaths, $cleanedExisting);
         }
 
-        // Upload new images
+        // Upload new images directly to public
         if ($request->hasFile('images')) {
             foreach ($request->file('images') as $image) {
-                $filename = time() . '_' . Str::random(10) . '.' . $image->getClientOriginalExtension();
-                $path = $image->storeAs('products', $filename, 'public');
-                $imagePaths[] = asset('storage/' . $path);
+                $imagePath = $this->saveImageToPublic($image);
+                $imagePaths[] = $imagePath;
             }
         }
 
         $data['images'] = $imagePaths;
         
-        // Decode JSON fields with null fallback
+        // Decode JSON fields
         if (isset($data['specifications']) && $data['specifications']) {
             $data['specifications'] = json_decode($data['specifications'], true);
         } else {
@@ -174,6 +247,13 @@ class ProductController extends Controller
                 'success' => false,
                 'message' => 'Product not found'
             ], 404);
+        }
+
+        // Clean image paths
+        if ($product->images && is_array($product->images)) {
+            $cleanedImages = array_map([$this, 'cleanImagePath'], $product->images);
+            $product->images = $cleanedImages;
+            $product->save();
         }
 
         return response()->json([
@@ -225,35 +305,35 @@ class ProductController extends Controller
 
         $data = $request->all();
         
-        // Handle image uploads - IMPROVED LOGIC
+        // Handle image uploads - DIRECT TO PUBLIC ONLY
         $imagePaths = [];
         
-        // First, preserve existing images if they exist
+        // Clean existing images
         if ($request->has('existing_images') && is_array($request->existing_images)) {
-            $imagePaths = $request->existing_images;
+            $cleanedExisting = array_map([$this, 'cleanImagePath'], $request->existing_images);
+            $imagePaths = $cleanedExisting;
             Log::info('Preserving existing images', ['existing_images' => $imagePaths]);
         } else {
-            // If no existing_images provided, keep the current product images
-            $imagePaths = $product->images ?? [];
+            // Clean current product images
+            $currentImages = $product->images ?? [];
+            $imagePaths = array_map([$this, 'cleanImagePath'], $currentImages);
             Log::info('No existing_images provided, keeping current images', ['current_images' => $imagePaths]);
         }
 
-        // Upload new images and add them to the list
+        // Upload new images directly to public
         if ($request->hasFile('images')) {
             Log::info('Processing new image uploads', ['count' => count($request->file('images'))]);
             foreach ($request->file('images') as $image) {
-                $filename = time() . '_' . Str::random(10) . '.' . $image->getClientOriginalExtension();
-                $path = $image->storeAs('products', $filename, 'public');
-                $fullUrl = asset('storage/' . $path);
-                $imagePaths[] = $fullUrl;
-                Log::info('New image uploaded', ['path' => $fullUrl]);
+                $imagePath = $this->saveImageToPublic($image);
+                $imagePaths[] = $imagePath;
+                Log::info('New image uploaded', ['path' => $imagePath]);
             }
         }
 
         $data['images'] = $imagePaths;
         Log::info('Final images array', ['images' => $imagePaths]);
         
-        // Decode JSON fields with null fallback
+        // Decode JSON fields
         if (isset($data['specifications']) && $data['specifications']) {
             $data['specifications'] = json_decode($data['specifications'], true);
         }
@@ -279,7 +359,7 @@ class ProductController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $product->fresh(), // Get fresh data from database
+            'data' => $product->fresh(),
             'message' => 'Product updated successfully'
         ]);
     }
@@ -295,11 +375,16 @@ class ProductController extends Controller
             ], 404);
         }
 
-        // Delete associated images
-        if ($product->images) {
-            foreach ($product->images as $image) {
-                if (!str_starts_with($image, 'http')) {
-                    Storage::disk('public')->delete($image);
+        // Delete images from public directory
+        if ($product->images && is_array($product->images)) {
+            foreach ($product->images as $imagePath) {
+                $cleanPath = $this->cleanImagePath($imagePath);
+                $relativePath = ltrim($cleanPath, '/');
+                $fullPath = public_path($relativePath);
+                
+                if (File::exists($fullPath)) {
+                    File::delete($fullPath);
+                    Log::info('Deleted image file', ['path' => $fullPath]);
                 }
             }
         }
@@ -329,9 +414,9 @@ class ProductController extends Controller
 
         if ($request->hasFile('images')) {
             foreach ($request->file('images') as $image) {
-                $filename = time() . '_' . Str::random(10) . '.' . $image->getClientOriginalExtension();
-                $path = $image->storeAs('products', $filename, 'public');
-                $imagePaths[] = asset('storage/' . $path);
+                // Save directly to public - NO STORAGE
+                $imagePath = $this->saveImageToPublic($image);
+                $imagePaths[] = $imagePath;
             }
         }
 

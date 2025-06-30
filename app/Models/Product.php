@@ -37,15 +37,17 @@ class Product extends Model
     ];
 
     // Accessor to get full image URLs
-    public function getImagesAttribute($value)
-    {
-        if (!$value) return [];
-        
-        $images = json_decode($value, true) ?? [];
-        return array_map(function ($image) {
-            return str_starts_with($image, 'http') ? $image : asset('storage/' . $image);
-        }, $images);
-    }
+  public function getImagesAttribute($value)
+{
+    if (!$value) return [];
+    
+    $images = json_decode($value, true) ?? [];
+
+    return array_map(function ($image) {
+        return str_starts_with($image, 'http') ? $image : asset($image);
+    }, $images);
+}
+
 
     // Mutator to store relative paths
     public function setImagesAttribute($value)
